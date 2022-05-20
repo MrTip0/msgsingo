@@ -73,14 +73,16 @@ func handleConnection(conn net.Conn, rx chan string, rxso *list.List, updates ch
 	go receiveMsgs(conn, &others, end1)
 	go sendMsgs(conn, rx, end2)
 
+	defer func() {
+		updates <- update{rx: rx, action: Rimuovi}
+	}()
+	
 updcycle:
 	for {
 		select {
 		case _ = <-end1:
-			updates <- update{rx: rx, action: Rimuovi}
 			break updcycle
 		case _ = <-end2:
-			updates <- update{rx: rx, action: Rimuovi}
 			break updcycle
 		default:
 		}
