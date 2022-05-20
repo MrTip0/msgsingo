@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+const (
+	Aggiungi int = 0
+	Rimuovi      = 1
+)
+
+type update struct {
+	rx     chan string
+	action int
+}
+
 func main() {
 	ln, err := net.Listen("tcp", ":4242")
 	if err != nil {
@@ -15,10 +25,8 @@ func main() {
 		return
 	}
 
-	rxs := list.New()
 	txs := list.New()
-
-	go sendMsgsBetweenProcesses(&txs, &rxs)
+	updates := list.New()
 
 	for {
 		conn, err := ln.Accept()
@@ -29,28 +37,71 @@ func main() {
 
 		fmt.Printf("%s has connected\n", conn.RemoteAddr())
 
-		nrx := make(chan string, 10)
 		ntx := make(chan string, 10)
+		updc := make(chan update)
 
-		go handleConnection(conn, ntx, nrx)
+		go handleConnection(conn, ntx, txs, updc)
 
-		rxs.PushBack(nrx)
+		el := updates.Front()
+		for el != nil {
+			el.Value.(chan update) <- update{rx: ntx, action: Aggiungi}
+			el = el.Next()
+		}
+
+		updates.PushBack(updc)
+
 		txs.PushBack(ntx)
 	}
 }
 
-func handleConnection(conn net.Conn, rx chan string, tx chan string) {
+func handleConnection(conn net.Conn, rx chan string, rxso *list.List, updates chan update) {
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
 	end1, end2 := make(chan bool, 1), make(chan bool, 1)
 
-	go receiveMsgs(conn, tx, end1)
+	others := list.New()
+
+	{
+		tmpl := rxso.Front()
+		for tmpl != nil {
+			if tmpl.Value != rx {
+				others.PushBack(tmpl.Value)
+			}
+			tmpl = tmpl.Next()
+		}
+	}
+
+	go receiveMsgs(conn, &others, end1)
 	go sendMsgs(conn, rx, end2)
 
-	<-end1
-	<-end2
+updcycle:
+	for {
+		select {
+		case _ = <-end1:
+			updates <- update{rx: rx, action: Rimuovi}
+			break updcycle
+		case _ = <-end2:
+			updates <- update{rx: rx, action: Rimuovi}
+			break updcycle
+		default:
+		}
+		nel := <-updates
+		if nel.action == Aggiungi {
+			if nel.rx != rx {
+				others.PushBack(nel.rx)
+			}
+		} else if nel.action == Rimuovi {
+			el := others.Front()
+			for el != nil && el.Value != nel.rx {
+				el = el.Next()
+			}
+			if el != nil {
+				others.Remove(el)
+			}
+		}
+	}
 }
 
-func receiveMsgs(conn net.Conn, tx chan string, end chan bool) {
+func receiveMsgs(conn net.Conn, tx **list.List, end chan bool) {
 	defer func() {
 		conn.Close()
 		end <- true
@@ -69,7 +120,12 @@ func receiveMsgs(conn net.Conn, tx chan string, end chan bool) {
 			// Remove x00
 			data = data[:len(data)-1]
 			fmt.Printf("INFO: received %s from %s\n", data, conn.RemoteAddr())
-			tx <- data
+			l := *tx
+			el := l.Front()
+			for el != nil {
+				el.Value.(chan string) <- data
+				el = el.Next()
+			}
 		}
 	}
 }
@@ -81,36 +137,11 @@ func sendMsgs(conn net.Conn, rx chan string, end chan bool) {
 	}()
 
 	for {
-		select {
-		case data := <-rx:
-			_, err := fmt.Fprintf(conn, "%s\x00", data)
-			if err != nil {
-				return
-			}
-			conn.SetDeadline(time.Now().Add(time.Minute * 5))
-		default:
+		data := <-rx
+		_, err := fmt.Fprintf(conn, "%s\x00", data)
+		if err != nil {
+			return
 		}
-		time.Sleep(time.Millisecond * 10)
-	}
-}
-
-func sendMsgsBetweenProcesses(txs **list.List, rxs **list.List) {
-	for {
-		listrx := *rxs
-		listrxel := listrx.Front()
-		for listrxel != nil {
-			select {
-			case data := <-listrxel.Value.(chan string):
-				listtx := *txs
-				listtxel := listtx.Front()
-				for listtxel != nil {
-					listtxel.Value.(chan string) <- data
-					listtxel = listtxel.Next()
-				}
-			default:
-			}
-			listrxel = listrxel.Next()
-		}
-		time.Sleep(time.Millisecond * 10)
+		conn.SetDeadline(time.Now().Add(time.Minute * 5))
 	}
 }
