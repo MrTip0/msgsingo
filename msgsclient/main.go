@@ -5,32 +5,45 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
 func main() {
-	conn, err := net.Dial("tcp", "localhost:4242")
+	var serverhost string
+
+	fmt.Printf("Insert the server ip:\n> ")
+	fmt.Scanf("%s", &serverhost)
+
+	port := "4242"
+
+	if strings.Contains(serverhost, ":") {
+		expl := strings.Split(serverhost, ":")
+		serverhost, port = expl[0], expl[1]
+	}
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", serverhost, port))
+
 	if err != nil {
 		fmt.Printf("An error occurred: %s\n", err.Error())
 		return
 	}
+	defer conn.Close()
+
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
 
-	end1, end2 := make(chan bool, 1), make(chan bool, 1)
+	fmt.Printf("Connecting...\n")
+	password := getPass(conn)
+	fmt.Printf("Connected\n")
 
-	go sender(conn, end1)
-	go receiver(conn, end2)
+	end := make(chan bool, 1)
 
-	<-end1
-	<-end2
+	go sender(conn, password)
+	go receiver(conn, end, password)
+
+	<-end
 }
 
-func sender(conn net.Conn, end chan bool) {
-	defer func() {
-		conn.Close()
-		end <- true
-	}()
-
+func sender(conn net.Conn, pass []byte) {
 	var msg string
 	var err error
 
@@ -42,7 +55,14 @@ func sender(conn net.Conn, end chan bool) {
 			fmt.Printf("Error while reading input: %s\n", err.Error())
 			continue
 		}
-		_, err = fmt.Fprintf(conn, "%s\x00", msg[:len(msg)-1])
+
+		data, err := gcmEncrypter(pass, msg[:len(msg)-1])
+		if err != nil {
+			fmt.Printf("Error while encripting input: %s\n", err.Error())
+			continue
+		}
+
+		_, err = fmt.Fprintf(conn, "%s\x00", data)
 		if err != nil {
 			fmt.Printf("Error while sending: %s\n", err.Error())
 			return
@@ -51,9 +71,8 @@ func sender(conn net.Conn, end chan bool) {
 	}
 }
 
-func receiver(conn net.Conn, end chan bool) {
+func receiver(conn net.Conn, end chan bool, pass []byte) {
 	defer func() {
-		conn.Close()
 		end <- true
 	}()
 
@@ -68,6 +87,12 @@ func receiver(conn net.Conn, end chan bool) {
 		conn.SetDeadline(time.Now().Add(time.Minute * 5))
 
 		if len(data) > 0 && data != "\x00" {
+			data = data[:len(data)-1]
+			data, err = gcmDecrypter(pass, data)
+			if err != nil {
+				fmt.Printf("error: %s\n", err.Error())
+				continue
+			}
 			fmt.Printf("received: %s\n", data)
 		}
 	}
