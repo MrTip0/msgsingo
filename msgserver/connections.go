@@ -2,80 +2,73 @@ package main
 
 import (
 	"bufio"
-	"container/list"
 	"fmt"
 	"net"
 	"time"
 )
 
-func handleConnection(conn net.Conn, rx chan string, rxso *list.List, updates chan update, dies chan chan string) {
+// conn -> Connection;
+// receiveChannel -> the channel where the function takes messages to be send;
+// sendChannel -> the channel where the function send the received messages;
+// updates -> the channel where the function sends when it dies;
+func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, updates chan update) {
+	var name string = "unknown name"
 	addr := conn.RemoteAddr()
 	defer func() {
-		dies <- rx
 		fmt.Printf("%s has disconnected\n", addr)
+		updates <- update{rx: receiveChannel, action: Remove, name: name}
 		conn.Close()
 	}()
 
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
 	end := make(chan bool, 1)
 
-	others := list.New()
-
-	{
-		tmpl := rxso.Front()
-		for tmpl != nil {
-			if tmpl.Value != rx {
-				others.PushBack(tmpl.Value)
-			}
-			tmpl = tmpl.Next()
-		}
-	}
-
 	password, err := getPass(conn)
 	if err != nil {
 		return
 	}
-	fmt.Printf("%s connected\n", addr)
 
-	go receiveMsgs(conn, &others, end, password)
-	go sendMsgs(conn, rx, password)
-
-	for {
-		select {
-		case _ = <-end:
+	{
+		reader := bufio.NewReader(conn)
+		name, err = reader.ReadString('\x00')
+		if err != nil {
 			return
-		default:
 		}
-		nel := <-updates
-		if nel.action == Aggiungi {
-			if nel.rx != rx {
-				others.PushBack(nel.rx)
-			}
-		} else if nel.action == Rimuovi {
-			el := others.Front()
-			for el != nil && el.Value != nel.rx {
-				el = el.Next()
-			}
-			if el != nil {
-				others.Remove(el)
-			}
+		name = name[:len(name)-1]
+		name, err = gcmDecrypter(password, name)
+		if err != nil {
+			fmt.Printf("ERROR: %s\n", err.Error())
+			name = "Unknown name"
 		}
 	}
+
+	updates <- update{rx: receiveChannel, action: Add, name: name}
+
+	fmt.Printf("%s connected\n", addr)
+
+	go receiveMsgs(conn, end, sendChannel, password, receiveChannel, name)
+	go sendMsgs(conn, receiveChannel, password)
+
+	<-end
 }
 
-func receiveMsgs(conn net.Conn, tx **list.List, end chan bool, pass []byte) {
+func receiveMsgs(conn net.Conn, end chan bool, sendChannel chan message, pass []byte, toAvoid chan message, name string) {
+	var data string
+	var err error
 	defer func() {
 		end <- true
 	}()
 
 	reader := bufio.NewReader(conn)
 
+	message := message{"", name, toAvoid}
+
 	for {
-		var data string
-		data, err := reader.ReadString('\x00')
+		data, err = reader.ReadString('\x00')
 		if err != nil {
 			return
 		}
+
 		if len(data) > 0 {
 			conn.SetDeadline(time.Now().Add(time.Minute * 5))
 			// Remove x00
@@ -87,25 +80,21 @@ func receiveMsgs(conn net.Conn, tx **list.List, end chan bool, pass []byte) {
 			}
 
 			fmt.Printf("INFO: received %s from %s\n", data, conn.RemoteAddr())
-			l := *tx
-			el := l.Front()
-			for el != nil {
-				el.Value.(chan string) <- data
-				el = el.Next()
-			}
+			message.message = data
+			sendChannel <- message
 		}
 	}
 }
 
-func sendMsgs(conn net.Conn, rx chan string, pass []byte) {
+func sendMsgs(conn net.Conn, rx chan message, pass []byte) {
 	for {
 		data := <-rx
-		data, err := gcmEncrypter(pass, data)
+		payload, err := gcmEncrypter(pass, fmt.Sprintf("%s - %s", data.author, data.message))
 		if err != nil {
 			fmt.Printf("ERROR: %s\n", err.Error())
 		}
 
-		_, err = fmt.Fprintf(conn, "%s\x00", data)
+		_, err = fmt.Fprintf(conn, "%s\x00", payload)
 		if err != nil {
 			return
 		}

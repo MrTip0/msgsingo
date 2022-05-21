@@ -10,10 +10,25 @@ import (
 )
 
 func main() {
-	var serverhost string
+	var serverhost, username string
+	{
+		var err error
+		reader := bufio.NewReader(os.Stdin)
 
-	fmt.Printf("Insert the server ip:\n> ")
-	fmt.Scanf("%s", &serverhost)
+		fmt.Printf("Insert the username that you want to use:\n> ")
+		if username, err = reader.ReadString('\n'); err != nil {
+			fmt.Printf("Error while reading input: %s", err.Error())
+			os.Exit(1)
+		}
+		username = username[:len(username)-1]
+
+		fmt.Printf("Insert the server ip:\n> ")
+		if serverhost, err = reader.ReadString('\n'); err != nil {
+			fmt.Printf("Error while reading input: %s", err.Error())
+			os.Exit(1)
+		}
+		serverhost = serverhost[:len(serverhost)-1]
+	}
 
 	port := "4242"
 
@@ -34,6 +49,14 @@ func main() {
 	fmt.Printf("Connecting...\n")
 	password := getPass(conn)
 	fmt.Printf("Connected\n")
+
+	{
+		data, err := gcmEncrypter(password, username)
+		if err != nil {
+			fmt.Printf("Error while encripting username: %s\n", err.Error())
+		}
+		fmt.Fprintf(conn, "%s\x00", data)
+	}
 
 	end := make(chan bool, 1)
 
@@ -93,7 +116,7 @@ func receiver(conn net.Conn, end chan bool, pass []byte) {
 				fmt.Printf("error: %s\n", err.Error())
 				continue
 			}
-			fmt.Printf("received: %s\n", data)
+			fmt.Println(data)
 		}
 	}
 }
