@@ -14,9 +14,11 @@ import (
 func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, updates chan update) {
 	var name string = "unknown name"
 	addr := conn.RemoteAddr()
+	terminate := make(chan bool, 1)
 	defer func() {
 		fmt.Printf("%s has disconnected\n", addr)
 		updates <- update{rx: receiveChannel, action: Remove, name: name}
+		terminate <- true
 		conn.Close()
 	}()
 
@@ -47,7 +49,7 @@ func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, u
 	fmt.Printf("%s connected\n", addr)
 
 	go receiveMsgs(conn, end, sendChannel, password, receiveChannel, name)
-	go sendMsgs(conn, receiveChannel, password)
+	go sendMsgs(conn, receiveChannel, password, terminate)
 
 	<-end
 }
@@ -86,18 +88,22 @@ func receiveMsgs(conn net.Conn, end chan bool, sendChannel chan message, pass []
 	}
 }
 
-func sendMsgs(conn net.Conn, rx chan message, pass []byte) {
+func sendMsgs(conn net.Conn, rx chan message, pass []byte, terminate chan bool) {
 	for {
-		data := <-rx
-		payload, err := gcmEncrypter(pass, fmt.Sprintf("%s - %s", data.author, data.message))
-		if err != nil {
-			fmt.Printf("ERROR: %s\n", err.Error())
-		}
+		select {
+		case data := <-rx:
+			payload, err := gcmEncrypter(pass, fmt.Sprintf("%s - %s", data.author, data.message))
+			if err != nil {
+				fmt.Printf("ERROR: %s\n", err.Error())
+			}
 
-		_, err = fmt.Fprintf(conn, "%s\x00", payload)
-		if err != nil {
+			_, err = fmt.Fprintf(conn, "%s\x00", payload)
+			if err != nil {
+				return
+			}
+			conn.SetDeadline(time.Now().Add(time.Minute * 5))
+		case <-terminate:
 			return
 		}
-		conn.SetDeadline(time.Now().Add(time.Minute * 5))
 	}
 }
