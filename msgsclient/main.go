@@ -3,11 +3,29 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
+
+type changetype uint8
+
+const (
+	Typed    changetype = 0
+	Received            = 1
+	Sent                = 2
+)
+
+type change struct {
+	ctype changetype
+	msg   string
+}
 
 func main() {
 	var serverhost, username string
@@ -46,9 +64,7 @@ func main() {
 
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
 
-	fmt.Printf("Connecting...\n")
 	password := getPass(conn)
-	fmt.Printf("Connected\n")
 
 	{
 		data, err := gcmEncrypter(password, username)
@@ -60,26 +76,31 @@ func main() {
 
 	end := make(chan bool, 1)
 
-	go sender(conn, password)
-	go receiver(conn, end, password)
+	sendchanges := make(chan change, 10)
+
+	go sender(conn, password, sendchanges)
+	go receiver(conn, end, password, sendchanges)
+	go ui(sendchanges)
 
 	<-end
 }
 
-func sender(conn net.Conn, pass []byte) {
+func sender(conn net.Conn, pass []byte, updates chan change) {
 	var msg string
 	var err error
 
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		msg, err = reader.ReadString('\n')
+		msg, err = readCharForChar(updates, reader)
 		if err != nil {
 			fmt.Printf("Error while reading input: %s\n", err.Error())
 			continue
 		}
 
-		data, err := gcmEncrypter(pass, msg[:len(msg)-1])
+		updates <- change{Sent, msg}
+
+		data, err := gcmEncrypter(pass, msg)
 		if err != nil {
 			fmt.Printf("Error while encripting input: %s\n", err.Error())
 			continue
@@ -94,12 +115,32 @@ func sender(conn net.Conn, pass []byte) {
 	}
 }
 
-func receiver(conn net.Conn, end chan bool, pass []byte) {
+func readCharForChar(updates chan change, reader *bufio.Reader) (string, error) {
+	res := ""
+	var tmp byte
+	var err error
+	cont := true
+	for cont {
+		if tmp, err = reader.ReadByte(); err != nil {
+			return "", err
+		}
+		if tmp != '\n' {
+			strtmp := string(tmp)
+			res += strtmp
+			updates <- change{Typed, strtmp}
+		} else {
+			cont = false
+		}
+	}
+	return res, nil
+}
+
+func receiver(conn net.Conn, end chan bool, pass []byte, updates chan change) {
 	defer func() {
 		end <- true
 	}()
-
 	reader := bufio.NewReader(conn)
+
 	var data string
 	var err error
 
@@ -116,7 +157,62 @@ func receiver(conn net.Conn, end chan bool, pass []byte) {
 				fmt.Printf("error: %s\n", err.Error())
 				continue
 			}
-			fmt.Println(data)
+			updates <- change{Received, data}
 		}
 	}
+}
+
+func drawUi(receivedsent []string, actmsg string, writer *bufio.Writer) {
+	_, heigth, _ := term.GetSize(int(os.Stdin.Fd()))
+	nscreen := make([]string, heigth)
+	var usable []string
+
+	usable = receivedsent[int(math.Max(float64(len(receivedsent)-heigth), 0)):]
+
+	for i := 0; i < heigth-2 && i < len(usable); i++ {
+		nscreen[i] = usable[i]
+	}
+
+	nscreen[heigth-1] = "> " + actmsg
+
+	clearScreen()
+	writer.Write([]byte(strings.Join(nscreen, "\n")))
+	writer.Flush()
+}
+
+func ui(changes chan change) {
+	receivedsent := make([]string, 0)
+	actmsg := ""
+	writer := bufio.NewWriter(os.Stdout)
+
+	for {
+		drawUi(receivedsent, actmsg, writer)
+		ch := <-changes
+		switch ch.ctype {
+		case Sent:
+			actmsg = ""
+			receivedsent = append(receivedsent, "\t"+ch.msg)
+		case Received:
+			receivedsent = append(receivedsent, ch.msg)
+		case Typed:
+			actmsg += ch.msg
+		}
+	}
+}
+
+func clearScreen() {
+	var clearcmd string = ""
+
+	switch runtime.GOOS {
+	case "windows":
+		clearcmd = "cls"
+	case "linux":
+		clearcmd = "clear"
+	case "darwin":
+		clearcmd = "clear"
+	}
+
+	cmd := exec.Command(clearcmd)
+	cmd.Stdout = os.Stdout
+	cmd.Run()
 }
