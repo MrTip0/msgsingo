@@ -3,18 +3,17 @@ package main
 import (
 	"container/list"
 	"fmt"
+	"sync"
 )
 
 func connectionController(update chan update, reciver chan message) {
 	sendChannels := list.New()
-	sendChannelsMutex := make(chan bool, 1)
-
-	sendChannelsMutex <- true
+	sendChannelsMutex := new(sync.Mutex)
 
 	go func() {
 		for {
 			upd := <-update
-			<-sendChannelsMutex
+			sendChannelsMutex.Lock()
 			if upd.action == Add {
 				sendChannels.PushBack(upd.rx)
 			} else if upd.action == Remove {
@@ -26,7 +25,7 @@ func connectionController(update chan update, reciver chan message) {
 					sendChannels.Remove(el)
 				}
 			}
-			sendChannelsMutex <- true
+			sendChannelsMutex.Unlock()
 			if upd.action == Add {
 				reciver <- message{fmt.Sprintf("%s has joined", upd.name), "server", upd.rx}
 			} else if upd.action == Remove {
@@ -37,7 +36,7 @@ func connectionController(update chan update, reciver chan message) {
 
 	for {
 		nmess := <-reciver
-		<-sendChannelsMutex
+		sendChannelsMutex.Lock()
 
 		el := sendChannels.Front()
 
@@ -49,6 +48,6 @@ func connectionController(update chan update, reciver chan message) {
 			el = el.Next()
 		}
 
-		sendChannelsMutex <- true
+		sendChannelsMutex.Unlock()
 	}
 }
