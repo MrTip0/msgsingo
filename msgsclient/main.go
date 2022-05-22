@@ -117,11 +117,11 @@ func sender(conn net.Conn, pass []byte, updates chan change) {
 
 func readCharForChar(updates chan change, reader *bufio.Reader) (string, error) {
 	res := ""
-	var tmp byte
+	var tmp rune
 	var err error
 	cont := true
 	for cont {
-		if tmp, err = reader.ReadByte(); err != nil {
+		if _, err = fmt.Scanf("%c", &tmp); err != nil {
 			return "", err
 		}
 		if tmp != '\n' {
