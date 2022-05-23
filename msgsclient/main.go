@@ -6,8 +6,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -17,8 +15,7 @@ import (
 type changetype uint8
 
 const (
-	Typed    changetype = 0
-	Received            = 1
+	Received changetype = 1
 	Sent                = 2
 )
 
@@ -92,11 +89,12 @@ func sender(conn net.Conn, pass []byte, updates chan change) {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		msg, err = readCharForChar(updates, reader)
-		if err != nil {
-			fmt.Printf("Error while reading input: %s\n", err.Error())
+		if msg, err = reader.ReadString('\n'); err != nil {
+			fmt.Printf("error: %s\n", err.Error())
 			continue
 		}
+
+		msg = msg[:len(msg)-1]
 
 		updates <- change{Sent, msg}
 
@@ -115,26 +113,6 @@ func sender(conn net.Conn, pass []byte, updates chan change) {
 	}
 }
 
-func readCharForChar(updates chan change, reader *bufio.Reader) (string, error) {
-	res := ""
-	var tmp rune
-	var err error
-	cont := true
-	for cont {
-		if _, err = fmt.Scanf("%c", &tmp); err != nil {
-			return "", err
-		}
-		if tmp != '\n' {
-			strtmp := string(tmp)
-			res += strtmp
-			updates <- change{Typed, strtmp}
-		} else {
-			cont = false
-		}
-	}
-	return res, nil
-}
-
 func receiver(conn net.Conn, end chan bool, pass []byte, updates chan change) {
 	defer func() {
 		end <- true
@@ -146,6 +124,7 @@ func receiver(conn net.Conn, end chan bool, pass []byte, updates chan change) {
 
 	for {
 		if data, err = reader.ReadString('\x00'); err != nil {
+			fmt.Println("The server has disconnected")
 			return
 		}
 		conn.SetDeadline(time.Now().Add(time.Minute * 5))
@@ -162,57 +141,45 @@ func receiver(conn net.Conn, end chan bool, pass []byte, updates chan change) {
 	}
 }
 
-func drawUi(receivedsent []string, actmsg string, writer *bufio.Writer) {
-	_, heigth, _ := term.GetSize(int(os.Stdin.Fd()))
-	nscreen := make([]string, heigth)
+func drawUi(receivedsent []string, writer *bufio.Writer) {
+	_, height, _ := term.GetSize(int(os.Stdin.Fd()))
+	nscreen := make([]string, height)
 	var usable []string
 
-	usable = receivedsent[int(math.Max(float64(len(receivedsent)-heigth), 0)):]
+	usable = receivedsent[int(math.Max(float64(len(receivedsent)-height), 0)):]
 
-	for i := 0; i < heigth-2 && i < len(usable); i++ {
+	for i := 0; i < height-2 && i < len(usable); i++ {
 		nscreen[i] = usable[i]
 	}
 
-	nscreen[heigth-1] = "> " + actmsg
+	nscreen[height-1] = "> "
 
-	clearScreen()
-	writer.Write([]byte(strings.Join(nscreen, "\n")))
+	writer.WriteString(fmt.Sprintf("\x1b[%d;1H", height))
+	writer.WriteString("\x1b[1J")
+	writer.WriteString("\x1b[1;1H")
+
+	_, err := writer.Write([]byte(strings.Join(nscreen, "\n")))
+	if err != nil {
+		fmt.Printf("err %s\n", err.Error())
+	}
+
+	writer.WriteString(fmt.Sprintf("\x1b[%d;1000H", height))
+
 	writer.Flush()
 }
 
 func ui(changes chan change) {
 	receivedsent := make([]string, 0)
-	actmsg := ""
 	writer := bufio.NewWriter(os.Stdout)
 
 	for {
-		drawUi(receivedsent, actmsg, writer)
+		drawUi(receivedsent, writer)
 		ch := <-changes
 		switch ch.ctype {
 		case Sent:
-			actmsg = ""
 			receivedsent = append(receivedsent, "\t"+ch.msg)
 		case Received:
 			receivedsent = append(receivedsent, ch.msg)
-		case Typed:
-			actmsg += ch.msg
 		}
 	}
-}
-
-func clearScreen() {
-	var clearcmd string = ""
-
-	switch runtime.GOOS {
-	case "windows":
-		clearcmd = "cls"
-	case "linux":
-		clearcmd = "clear"
-	case "darwin":
-		clearcmd = "clear"
-	}
-
-	cmd := exec.Command(clearcmd)
-	cmd.Stdout = os.Stdout
-	cmd.Run()
 }
