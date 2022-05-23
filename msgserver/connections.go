@@ -11,7 +11,7 @@ import (
 // conn -> Connection;
 // receiveChannel -> the channel where the function takes messages to be send;
 // sendChannel -> the channel where the function send the received messages;
-// updates -> the channel where the function sends when it dies;
+// updates -> the channel where the function sends when it is end and when the connection is created;
 func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, updates chan update) {
 	var name string = "unknown name"
 	addr := conn.RemoteAddr()
