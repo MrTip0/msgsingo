@@ -163,8 +163,6 @@ func drawUi(receivedsent []string, writer *bufio.Writer) {
 		fmt.Printf("err %s\n", err.Error())
 	}
 
-	writer.WriteString(fmt.Sprintf("\x1b[%d;1000H", height))
-
 	writer.Flush()
 }
 
