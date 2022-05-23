@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -23,7 +24,9 @@ func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, u
 	}()
 
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
-	end := make(chan bool, 1)
+
+	end := new(sync.Mutex)
+	end.Lock()
 
 	password, err := getPass(conn)
 	if err != nil {
@@ -51,14 +54,14 @@ func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, u
 	go receiveMsgs(conn, end, sendChannel, password, receiveChannel, name)
 	go sendMsgs(conn, receiveChannel, password, terminate)
 
-	<-end
+	end.Lock()
 }
 
-func receiveMsgs(conn net.Conn, end chan bool, sendChannel chan message, pass []byte, toAvoid chan message, name string) {
+func receiveMsgs(conn net.Conn, end *sync.Mutex, sendChannel chan message, pass []byte, toAvoid chan message, name string) {
 	var data string
 	var err error
 	defer func() {
-		end <- true
+		end.Unlock()
 	}()
 
 	reader := bufio.NewReader(conn)
