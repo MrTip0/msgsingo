@@ -1,4 +1,4 @@
-package main
+package mycrypto
 
 import (
 	"bufio"
@@ -9,7 +9,7 @@ import (
 	"net"
 )
 
-func getPass(conn net.Conn) ([]byte, error) {
+func GetKey(conn net.Conn) ([]byte, error) {
 	prime, err := rand.Prime(rand.Reader, 64)
 	if err != nil {
 		return nil, fmt.Errorf("%s", err.Error())

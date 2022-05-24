@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"msgserver/mycrypto"
 	"net"
 	"sync"
 	"time"
@@ -25,10 +26,7 @@ func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, u
 
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
 
-	end := new(sync.Mutex)
-	end.Lock()
-
-	password, err := getPass(conn)
+	key, err := mycrypto.GetKey(conn)
 	if err != nil {
 		return
 	}
@@ -40,10 +38,26 @@ func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, u
 			return
 		}
 		name = name[:len(name)-1]
-		name, err = gcmDecrypter(password, name)
+		name, err = mycrypto.GcmDecrypter(key, name)
 		if err != nil {
 			fmt.Printf("ERROR: %s\n", err.Error())
 			name = "Unknown name"
+		}
+
+		if *pass != "" {
+			mycrypto.SendEncrypted(conn, "pass", key)
+			insertedPass, err := mycrypto.ReadEncrypted(reader, key)
+			if err != nil {
+				return
+			}
+			if insertedPass != *pass {
+				mycrypto.SendEncrypted(conn, "wrong", key)
+				return
+			} else {
+				mycrypto.SendEncrypted(conn, "ok", key)
+			}
+		} else {
+			mycrypto.SendEncrypted(conn, "nopass", key)
 		}
 	}
 
@@ -51,13 +65,16 @@ func handleConnection(conn net.Conn, receiveChannel, sendChannel chan message, u
 
 	fmt.Printf("%s connected\n", addr)
 
-	go receiveMsgs(conn, end, sendChannel, password, receiveChannel, name)
-	go sendMsgs(conn, receiveChannel, password, terminate)
+	end := new(sync.Mutex)
+	end.Lock()
+
+	go receiveMsgs(conn, end, sendChannel, key, receiveChannel, name)
+	go sendMsgs(conn, receiveChannel, key, terminate)
 
 	end.Lock()
 }
 
-func receiveMsgs(conn net.Conn, end *sync.Mutex, sendChannel chan message, pass []byte, toAvoid chan message, name string) {
+func receiveMsgs(conn net.Conn, end *sync.Mutex, sendChannel chan message, key []byte, toAvoid chan message, name string) {
 	var data string
 	var err error
 	defer func() {
@@ -69,41 +86,28 @@ func receiveMsgs(conn net.Conn, end *sync.Mutex, sendChannel chan message, pass 
 	message := message{"", name, toAvoid}
 
 	for {
-		data, err = reader.ReadString('\x00')
+		data, err = mycrypto.ReadEncrypted(reader, key)
 		if err != nil {
 			return
 		}
 
-		if len(data) > 0 {
-			conn.SetDeadline(time.Now().Add(time.Minute * 5))
-			// Remove x00
-			data = data[:len(data)-1]
-			data, err = gcmDecrypter(pass, data)
-			if err != nil {
-				fmt.Printf("ERROR: %s\n", err.Error())
-				continue
-			}
+		fmt.Printf("INFO: received %s from %s\n", data, conn.RemoteAddr())
+		message.message = data
+		sendChannel <- message
+		conn.SetDeadline(time.Now().Add(time.Minute * 5))
 
-			fmt.Printf("INFO: received %s from %s\n", data, conn.RemoteAddr())
-			message.message = data
-			sendChannel <- message
-		}
 	}
 }
 
-func sendMsgs(conn net.Conn, rx chan message, pass []byte, terminate chan bool) {
+func sendMsgs(conn net.Conn, rx chan message, key []byte, terminate chan bool) {
 	for {
 		select {
 		case data := <-rx:
-			payload, err := gcmEncrypter(pass, fmt.Sprintf("%s - %s", data.author, data.message))
-			if err != nil {
-				fmt.Printf("ERROR: %s\n", err.Error())
+			if err := mycrypto.SendEncrypted(conn, fmt.Sprintf("%s - %s", data.author, data.message), key); err != nil {
+				fmt.Printf("%s\n", err.Error())
+				continue
 			}
 
-			_, err = fmt.Fprintf(conn, "%s\x00", payload)
-			if err != nil {
-				return
-			}
 			conn.SetDeadline(time.Now().Add(time.Minute * 5))
 		case <-terminate:
 			return

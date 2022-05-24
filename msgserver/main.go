@@ -5,23 +5,9 @@ import (
 	"net"
 )
 
-const (
-	Add    int = 0
-	Remove     = 1
-)
-
-type update struct {
-	action int
-	rx     chan message
-	name   string
-}
-
-type message struct {
-	message, author string
-	rx              chan message
-}
-
 func main() {
+	initFlags()
+
 	ln, err := net.Listen("tcp", ":4242")
 	if err != nil {
 		fmt.Printf("An error occurred: %s\n", err.Error())

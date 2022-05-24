@@ -1,4 +1,4 @@
-package main
+package mycrypto
 
 import (
 	"crypto/aes"
@@ -25,7 +25,7 @@ func rightSizePass(password *big.Int) []byte {
 	return pass
 }
 
-func gcmEncrypter(key []byte, data string) (string, error) {
+func GcmEncrypter(key []byte, data string) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -46,7 +46,7 @@ func gcmEncrypter(key []byte, data string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-func gcmDecrypter(key []byte, data string) (string, error) {
+func GcmDecrypter(key []byte, data string) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
