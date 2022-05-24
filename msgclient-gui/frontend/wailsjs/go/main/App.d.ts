@@ -4,3 +4,5 @@
 export function CreateConnection(arg1:string,arg2:string):void;
 
 export function SendMessage(arg1:string):void;
+
+export function SendPassword(arg1:string):void;

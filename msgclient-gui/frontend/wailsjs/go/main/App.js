@@ -9,3 +9,7 @@ export function CreateConnection(arg1, arg2) {
 export function SendMessage(arg1) {
   window['go']['main']['App']['SendMessage'](arg1);
 }
+
+export function SendPassword(arg1) {
+  window['go']['main']['App']['SendPassword'](arg1);
+}

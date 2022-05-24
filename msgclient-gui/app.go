@@ -52,19 +52,39 @@ func (a *App) CreateConnection(host, user string) {
 
 	conn.SetDeadline(time.Now().Add(time.Minute * 5))
 
-	password := getPass(conn)
+	key := getPass(conn)
 
 	{
-		data, err := gcmEncrypter(password, user)
+		data, err := gcmEncrypter(key, user)
 		if err != nil {
-			fmt.Printf("Error while encripting username: %s\n", err.Error())
+			fmt.Printf("Error while encrypting username: %s\n", err.Error())
 		}
 		fmt.Fprintf(conn, "%s\x00", data)
-	}
-	a.conn = conn
-	a.connKey = password
 
-	go receiver(conn, password, a.ctx)
+		reader := bufio.NewReader(conn)
+
+		if data, err = reader.ReadString('\x00'); err != nil {
+			fmt.Printf("error: %s\n", err.Error())
+			return
+		}
+
+		if data, err = gcmDecrypter(key, data[:len(data)-1]); err != nil {
+			fmt.Printf("error: %s\n", err.Error())
+			return
+		}
+
+		a.conn = conn
+		a.connKey = key
+
+		fmt.Println(data)
+
+		if data == "pass" {
+			runtime.EventsEmit(a.ctx, "passwordRequired")
+			return
+		}
+	}
+
+	go receiver(conn, key, a.ctx)
 	runtime.EventsEmit(a.ctx, "connectionOpened")
 	fmt.Println("Connected")
 }
@@ -84,7 +104,33 @@ func (a *App) SendMessage(msg string) {
 	}
 }
 
-func receiver(conn net.Conn, pass []byte, ctx context.Context) {
+func (a *App) SendPassword(pass string) {
+	go a.SendMessage(pass)
+	reader := bufio.NewReader(a.conn)
+
+	var data string
+	var err error
+
+	if data, err = reader.ReadString('\x00'); err != nil {
+		fmt.Println("The server has disconnected")
+		runtime.EventsEmit(a.ctx, "connectionClosed")
+		return
+	}
+
+	data = data[:len(data)-1]
+	data, err = gcmDecrypter(a.connKey, data)
+	if err != nil {
+		fmt.Printf("error: %s\n", err.Error())
+	}
+
+	if data == "ok" {
+		go receiver(a.conn, a.connKey, a.ctx)
+		runtime.EventsEmit(a.ctx, "connectionOpened")
+		fmt.Println("Connected")
+	}
+}
+
+func receiver(conn net.Conn, key []byte, ctx context.Context) {
 	defer func() {
 		runtime.EventsEmit(ctx, "connectionClosed")
 	}()
@@ -103,7 +149,7 @@ func receiver(conn net.Conn, pass []byte, ctx context.Context) {
 
 		if len(data) > 0 && data != "\x00" {
 			data = data[:len(data)-1]
-			data, err = gcmDecrypter(pass, data)
+			data, err = gcmDecrypter(key, data)
 			if err != nil {
 				fmt.Printf("error: %s\n", err.Error())
 				continue
